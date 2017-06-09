@@ -9,6 +9,9 @@
 #include "MPC.h"
 #include "json.hpp"
 
+#include <cppad/cppad.hpp>
+#include <cppad/ipopt/solve.hpp>
+
 // for convenience
 using json = nlohmann::json;
 
@@ -98,8 +101,62 @@ int main() {
           * Both are in between [-1, 1].
           *
           */
-          double steer_value;
-          double throttle_value;
+
+          // get delta and a from JSON object.
+          double delta = j[1]["steering_angle"];
+          double a = j[1]["throttle"];
+          
+          // mph -> m/s
+          // https://www.unitjuggler.com/convert-speed-from-mph-to-ms.html
+          v = v*0.44704; 
+
+          // Transform ptsx, ptxy from global coordination to vehicle coordination  
+          int n_ptsx = ptsx.size();
+          Eigen::VectorXd ptsx_car(n_ptsx);
+          Eigen::VectorXd ptsy_car(n_ptsx);
+          assert(ptsx.size() == ptsy.size());
+          for(int i = 0; i < n_ptsx; i++){
+            ptsx_car[i] = (ptsx[i] - px) * CppAD::cos(psi) + (ptsy[i] - py) * CppAD::sin(psi);
+            ptsy_car[i] = -(ptsx[i] - px) * CppAD::sin(psi) + (ptsy[i] - py) * CppAD::cos(psi);
+          }
+          double px_car = 0;
+          double py_car = 0;
+          double psi_car = 0;
+              
+          // use `polyfit` to fit a third order polynomial to the waypoints.
+  	  auto coeffs = polyfit(ptsx_car, ptsy_car, 3);
+          //std::cout << coeffs << std::endl;
+
+	  // The cross track error is calculated by evaluating at polynomial at x, f(x) and subtracting y.
+          // f(x) = c0 + c1*x + c2*x^2 + c3*x^3.
+          // x = 0.
+          // px_car = py_car = psi_car =0.
+  	  double cte = polyeval(coeffs, px_car) - py_car;
+  	  // the orientation error is psi -f'(x), f'(x) is derivative of f(x).
+          // f'(x) = c1 + 2*c2*x + 3*c3*x^2.
+          // x = 0.
+  	  double epsi = psi_car - atan(coeffs[1]);
+
+          // consider 100ms latency.
+          const double latency = 0.1;
+          const double Lf = 2.67;
+          px_car += v * latency;
+          py_car = 0.0;
+          psi_car = 0.0 + v * (-delta) / Lf * latency;
+          v = v + a * latency;
+          epsi += v * (-delta) / Lf * latency;
+          cte += v * sin(epsi) * latency;
+
+          Eigen::VectorXd state(6);
+  	  state << px_car, py_car, psi_car, v, cte, epsi;
+
+          auto vars = mpc.Solve(state, coeffs);    
+          
+          // Due to unity coordination, it is necessary to switch 180 degree for steer value here.
+          // https://github.com/xfqbuaa/CarND-MPC-Project/blob/master/DATA.md
+          // divide by deg2rad(25)
+          double steer_value = -vars[0]/deg2rad(25);
+          double throttle_value = vars[1];
 
           json msgJson;
           // NOTE: Remember to divide by deg2rad(25) before you send the steering value back.
@@ -108,8 +165,8 @@ int main() {
           msgJson["throttle"] = throttle_value;
 
           //Display the MPC predicted trajectory 
-          vector<double> mpc_x_vals;
-          vector<double> mpc_y_vals;
+          vector<double> mpc_x_vals = mpc.mpc_x;
+          vector<double> mpc_y_vals = mpc.mpc_y;
 
           //.. add (x,y) points to list here, points are in reference to the vehicle's coordinate system
           // the points in the simulator are connected by a Green line
@@ -120,7 +177,11 @@ int main() {
           //Display the waypoints/reference line
           vector<double> next_x_vals;
           vector<double> next_y_vals;
-
+	  
+	  for (int i=0;i<n_ptsx;i++){
+            next_x_vals.push_back(ptsx_car(i));
+            next_y_vals.push_back(ptsy_car(i));
+          }
           //.. add (x,y) points to list here, points are in reference to the vehicle's coordinate system
           // the points in the simulator are connected by a Yellow line
 
