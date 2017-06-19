@@ -3,6 +3,194 @@ Self-Driving Car Engineer Nanodegree Program
 
 ---
 
+## Summary
+
+1. Codes compile without errors with `cmake` and `make`.
+2. The vehicle successfully drive a lap around the track without leaving the driving portion of track surface.
+3. The maximum vehicle speed is about 80 mph.
+
+## Procedures
+
+1. Coordination system transformation.
+2. Fit the polynomial to the waypoints.
+3. Calculate initial cross track error and orientation error values.
+4. Define the components of the cost function (state, actuators, etc).
+5. Define the model constraints. These are the state update equations defined in the Vehicle Models module.
+6. Optimize cost function weights and verify in simulator.
+
+## Coordination transformation
+
+There are three coordination system in this projects:
+1. map coordination system - **the global coordination**  
+2. vehicle coordination system - **psi**
+3. vehicle coordination system in navigation model - **psi_untiy**
+
+At first it is necessary to translate and rotate from the global coordination to psi coordination. There are two steps one by one and shown in below pictures. The fist step is to translate (-px,-py) then vechile will be at psi coordination origin position. The second step is to rotate psi then vehicle will be traveling down a straight road and the longitudinal direction is the same as the x-axis. In this case, cross crack error and orientation error equations in the class can be used here directly.
+
+Details translating and rotating methods can be found [Translating and rotaing equaitons](http://www.cs.brandeis.edu/~cs155/Lecture_06.pdf ).
+
+![](/home/xufq/proj/CarND-MPC-Project/images/cs_translating_rotating.jpg)
+
+After translating and rotating to psi coordination, there is still difference between psi and psi_unity coordination systems. As [DATA](https://github.com/udacity/CarND-MPC-Project/blob/master/DATA.md) shows, except a rotating 90 degree, there is a reverse between psi and psi_unity coordination systems. Since steering angle here is only variable value, it is only necessary to consider reverse to transform between psi_unity and psi for finally steering value parameter determination.
+
+`double steer_value = -vars[0]/deg2rad(25);`
+
+psi and psi_unity representations
+
+`psi`
+```
+//            90
+//
+//  180                   0/360
+//
+//            270
+psi_unity
+
+//            0/360
+//
+//  270                   90
+//
+//            180
+```
+
+## Latency
+
+In a real car, an actuation command won't execute instantly - there will be a delay as the command propagates through the system. A realistic delay might be on the order of 100 milliseconds. This is a problem called "latency" and should be considered in mpc controller codes.
+
+In this projects, latency has been implemented after transforming from the global coordination to psi coordiantion systems. At that moment, the vehicle is moving along x-axis.
+
+```
+// consider 100ms latency.
+const double latency = 0.1;
+const double Lf = 2.67;
+double px_car = v*latency;
+double py_car = 0;
+double psi_car = -v*delta*latency/Lf;
+v = v + a * latency;
+```
+
+## Weights to optimize MPC controller behaviors
+
+Similar to mpc-quizzes projects, fitting the polynomial to the waypoints.
+
+`auto coeffs = polyfit(ptsx_car, ptsy_car, 3);`
+
+Calculating initial cross track error and orientation error values.
+
+```
+// The cross track error is calculated by evaluating at polynomial at x, f(x) and subtracting y.
+// f(x) = c0 + c1*x + c2*x^2 + c3*x^3.
+double cte = polyeval(coeffs, px_car) - py_car;
+// the orientation error is psi -f'(x), f'(x) is derivative of f(x).
+// f'(x) = c1 + 2*c2*x + 3*c3*x^2.
+double epsi = psi_car - atan(coeffs[1] + 2*px_car*coeffs[2] + 3*px_car*px_car*coeffs[3]);
+```
+
+The cost functions has been defined as follow.
+
+```
+// The part of the cost based on the reference state.
+for (int i = 0; i < N; i++) {
+  fg[0] += factor_cte * CppAD::pow(vars[cte_start + i] - ref_cte, 2);
+  fg[0] += factor_epsi * CppAD::pow(vars[epsi_start + i] - ref_epsi, 2);
+  fg[0] += factor_v * CppAD::pow(vars[v_start + i] - ref_v, 2);
+}
+
+// Minimize the use of actuators.
+for (int i = 0; i < N - 1; i++) {
+  fg[0] += factor_steering * CppAD::pow(vars[delta_start + i], 2);
+  fg[0] += factor_throttle * CppAD::pow(vars[a_start + i], 2);
+}
+
+// Minimize the value gap between sequential actuations.
+for (int i = 0; i < N - 2; i++) {
+  fg[0] += factor_diff_steering * CppAD::pow(vars[delta_start + i + 1] - vars[delta_start + i], 2);
+  fg[0] += factor_diff_throttle * CppAD::pow(vars[a_start + i + 1] - vars[a_start + i], 2);
+}
+
+fg[0] *= 1/(factor_cte + factor_epsi + factor_v + factor_steering + factor_throttle + factor_diff_steering + factor_diff_throttle);
+```
+Most of time has been spent on optimizing cost functions weights and then to confirm in simulator. Finally there are 2 sets of weights in codes.
+1. Cost functions weights A
+
+For weights A, the maximum vehicle speed is about 80 mph, the vehicle speed will drop down automatically when turning a sharp corner.
+
+The disadvantages for weights A is after the first loop, the vehicle will vibrate heavily and unstable.
+
+```
+// Factors for the cost computation
+// 1, 1, 1, 50, 100, 500, 300, 90
+// 1000, 1000, .1, 10000, 1, 50000, 10000, 50
+const double factor_cte   = 1000;  
+const double factor_epsi  = 1000;
+const double factor_v     = .1;
+const double factor_steering = 10000;
+const double factor_throttle = 1;  
+const double factor_diff_steering = 50000;
+const double factor_diff_throttle = 10000;
+```
+while `double ref_v = 50;`
+
+2. Cost functions weights B
+
+For weights B, the maximum vehicle speed is about 60 mph but stable after the first loop. the vehicle speed does not obviously drop down automatically when turning a sharp corner.
+
+```
+const double factor_cte   = 1;  
+const double factor_epsi  = 1;
+const double factor_v     = 1;
+const double factor_steering = 50;
+const double factor_throttle = 100;  
+const double factor_diff_steering = 500;
+const double factor_diff_throttle = 300;
+```
+while `double ref_v = 90;`
+
+## Display the waypoints and MPC predicted trajectory
+
+The transformed `ptsx_car` and `ptsy_car` have been feed into `next_x_vals` and `next_y_vals` and to show in yellow line as vehicle waypoints/reference line.
+
+MPC codes generate mpc class data `mpc.mpc_x` and `mpc.mpc_y` and applied to `mpc_x_vals` and `mpc_y_vals` to display the mpc predicted trajectory.
+
+```
+//Display the MPC predicted trajectory
+vector<double> mpc_x_vals = mpc.mpc_x;
+vector<double> mpc_y_vals = mpc.mpc_y;
+
+//.. add (x,y) points to list here, points are in reference to the vehicle's coordinate system
+// the points in the simulator are connected by a Green line
+
+msgJson["mpc_x"] = mpc_x_vals;
+msgJson["mpc_y"] = mpc_y_vals;
+
+//Display the waypoints/reference line
+vector<double> next_x_vals;
+vector<double> next_y_vals;
+
+for (int i=0;i<n_ptsx;i++){
+  next_x_vals.push_back(ptsx_car(i));
+  next_y_vals.push_back(ptsy_car(i));
+}
+
+//.. add (x,y) points to list here, points are in reference to the vehicle's coordinate system
+// the points in the simulator are connected by a Yellow line
+
+msgJson["next_x"] = next_x_vals;
+msgJson["next_y"] = next_y_vals;
+```
+
+## Unit transformation
+
+The vehicle speed mph should be transferred into m/s since mph is not ISO unit for calculation. The realted transformation link can be found [mph to m/s](https://www.unitjuggler.com/convert-speed-from-mph-to-ms.html).
+
+```
+// mph -> m/s
+// https://www.unitjuggler.com/convert-speed-from-mph-to-ms.html
+v = v*0.44704;
+```
+
+Of course it seems unit transformation is not obligatory since it can be implemented in cost functions weights optimization.  
+
 ## Dependencies
 
 * cmake >= 3.5
@@ -19,7 +207,7 @@ Self-Driving Car Engineer Nanodegree Program
   * Run either `install-mac.sh` or `install-ubuntu.sh`.
   * If you install from source, checkout to commit `e94b6e1`, i.e.
     ```
-    git clone https://github.com/uWebSockets/uWebSockets 
+    git clone https://github.com/uWebSockets/uWebSockets
     cd uWebSockets
     git checkout e94b6e1
     ```
@@ -31,7 +219,7 @@ Self-Driving Car Engineer Nanodegree Program
   * Mac: `brew install ipopt`
   * Linux
     * You will need a version of Ipopt 3.12.1 or higher. The version available through `apt-get` is 3.11.x. If you can get that version to work great but if not there's a script `install_ipopt.sh` that will install Ipopt. You just need to download the source from the Ipopt [releases page](https://www.coin-or.org/download/source/Ipopt/) or the [Github releases](https://github.com/coin-or/Ipopt/releases) page.
-    * Then call `install_ipopt.sh` with the source directory as the first argument, ex: `bash install_ipopt.sh Ipopt-3.12.1`. 
+    * Then call `install_ipopt.sh` with the source directory as the first argument, ex: `bash install_ipopt.sh Ipopt-3.12.1`.
   * Windows: TODO. If you can use the Linux subsystem and follow the Linux instructions.
 * [CppAD](https://www.coin-or.org/CppAD/)
   * Mac: `brew install cppad`

@@ -22,7 +22,7 @@ double dt = 0.1;
 const double Lf = 2.67;
 double ref_cte = 0;
 double ref_epsi = 0;
-double ref_v = 90;
+double ref_v = 50;
 
 // The solver takes all the state variables and actuator
 // variables in a singular vector. Thus, we should to establish
@@ -37,15 +37,15 @@ size_t delta_start = epsi_start + N;
 size_t a_start = delta_start + N - 1;
 
 // Factors for the cost computation
-// 1, 1, 1, 50, 50, 500, 500, 90
-// 300, 300, 1, 300, 100, 5000, 100, 100
-const double factor_cte   = 1;  
-const double factor_epsi  = 1; 
-const double factor_v     = 1;
-const double facotr_steering = 50; 
-const double factor_throttle = 50;  
-const double factor_diff_steering = 500; 
-const double factor_diff_throttle = 500; 
+// 1, 1, 1, 50, 100, 500, 300, 90
+// 1000, 1000, .1, 10000, 1, 50000, 10000, 50
+const double factor_cte   = 1000;  
+const double factor_epsi  = 1000; 
+const double factor_v     = .1;
+const double factor_steering = 10000; 
+const double factor_throttle = 1;  
+const double factor_diff_steering = 50000; 
+const double factor_diff_throttle = 10000; 
 
 class FG_eval {
  public:
@@ -72,7 +72,7 @@ class FG_eval {
 
     // Minimize the use of actuators.
     for (int i = 0; i < N - 1; i++) {
-      fg[0] += facotr_steering * CppAD::pow(vars[delta_start + i], 2);
+      fg[0] += factor_steering * CppAD::pow(vars[delta_start + i], 2);
       fg[0] += factor_throttle * CppAD::pow(vars[a_start + i], 2);
     }
 
@@ -81,6 +81,8 @@ class FG_eval {
       fg[0] += factor_diff_steering * CppAD::pow(vars[delta_start + i + 1] - vars[delta_start + i], 2);
       fg[0] += factor_diff_throttle * CppAD::pow(vars[a_start + i + 1] - vars[a_start + i], 2);
     }
+  
+    fg[0] *= 1/(factor_cte + factor_epsi + factor_v + factor_steering + factor_throttle + factor_diff_steering + factor_diff_throttle);
 
     //
     // Setup Constraints

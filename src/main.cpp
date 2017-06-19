@@ -110,42 +110,40 @@ int main() {
           // https://www.unitjuggler.com/convert-speed-from-mph-to-ms.html
           v = v*0.44704; 
 
-          // Transform ptsx, ptxy from global coordination to vehicle coordination  
+          // Transform ptsx, ptxy from global coordination to vehicle coordination psi cs
+  	  // Transform and rotate 
+          // http://www.cs.brandeis.edu/~cs155/Lecture_06.pdf  
+          // page 17
+          // It is necessary to reverse steering value finally due to the relationship between psi_utility cs and pis cs.
           int n_ptsx = ptsx.size();
           Eigen::VectorXd ptsx_car(n_ptsx);
           Eigen::VectorXd ptsy_car(n_ptsx);
           assert(ptsx.size() == ptsy.size());
           for(int i = 0; i < n_ptsx; i++){
-            ptsx_car[i] = (ptsx[i] - px) * CppAD::cos(psi) + (ptsy[i] - py) * CppAD::sin(psi);
-            ptsy_car[i] = -(ptsx[i] - px) * CppAD::sin(psi) + (ptsy[i] - py) * CppAD::cos(psi);
+            double shift_x = ptsx[i] - px;
+            double shift_y = ptsy[i] - py;
+            ptsx_car[i] = shift_x * cos(psi) + shift_y * sin(psi);
+            ptsy_car[i] = -shift_x * sin(psi) + shift_y * cos(psi);            
           }
-          double px_car = 0;
-          double py_car = 0;
-          double psi_car = 0;
-              
+          
           // use `polyfit` to fit a third order polynomial to the waypoints.
   	  auto coeffs = polyfit(ptsx_car, ptsy_car, 3);
-          //std::cout << coeffs << std::endl;
-
-	  // The cross track error is calculated by evaluating at polynomial at x, f(x) and subtracting y.
-          // f(x) = c0 + c1*x + c2*x^2 + c3*x^3.
-          // x = 0.
-          // px_car = py_car = psi_car =0.
-  	  double cte = polyeval(coeffs, px_car) - py_car;
-  	  // the orientation error is psi -f'(x), f'(x) is derivative of f(x).
-          // f'(x) = c1 + 2*c2*x + 3*c3*x^2.
-          // x = 0.
-  	  double epsi = psi_car - atan(coeffs[1]);
+          //std::cout << coeffs << std::endl;  
 
           // consider 100ms latency.
           const double latency = 0.1;
           const double Lf = 2.67;
-          px_car += v * latency;
-          py_car = 0.0;
-          psi_car = 0.0 + v * (-delta) / Lf * latency;
+          double px_car = v*latency; 
+          double py_car = 0;
+          double psi_car = -v*delta*latency/Lf;
           v = v + a * latency;
-          epsi += v * (-delta) / Lf * latency;
-          cte += v * sin(epsi) * latency;
+
+	  // The cross track error is calculated by evaluating at polynomial at x, f(x) and subtracting y.
+          // f(x) = c0 + c1*x + c2*x^2 + c3*x^3.
+  	  double cte = polyeval(coeffs, px_car) - py_car;
+  	  // the orientation error is psi -f'(x), f'(x) is derivative of f(x).
+          // f'(x) = c1 + 2*c2*x + 3*c3*x^2.
+  	  double epsi = psi_car - atan(coeffs[1] + 2*px_car*coeffs[2] + 3*px_car*px_car*coeffs[3]);
 
           Eigen::VectorXd state(6);
   	  state << px_car, py_car, psi_car, v, cte, epsi;
@@ -155,6 +153,7 @@ int main() {
           // Due to unity coordination, it is necessary to switch 180 degree for steer value here.
           // https://github.com/xfqbuaa/CarND-MPC-Project/blob/master/DATA.md
           // divide by deg2rad(25)
+
           double steer_value = -vars[0]/deg2rad(25);
           double throttle_value = vars[1];
 
@@ -187,7 +186,6 @@ int main() {
 
           msgJson["next_x"] = next_x_vals;
           msgJson["next_y"] = next_y_vals;
-
 
           auto msg = "42[\"steer\"," + msgJson.dump() + "]";
           std::cout << msg << std::endl;
